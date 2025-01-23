@@ -1,1 +1,1 @@
-# go-ping-srv6
+# go-srv6-ping
