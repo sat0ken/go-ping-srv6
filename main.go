@@ -2,11 +2,22 @@ package main
 
 import (
 	"fmt"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket"
+	"github.com/gopacket/gopacket/layers"
 	"log"
 	"net"
 )
+
+type segmentRoutingHeader struct {
+	nextHeader  uint8
+	hdrLen      uint8
+	routingType uint8
+	segLeft     uint8
+	lastEntry   uint8
+	flags       uint8
+	tags        uint16
+	segmentList []net.IP
+}
 
 func main() {
 	// IPv6ヘッダを作成

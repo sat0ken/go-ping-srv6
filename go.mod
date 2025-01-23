@@ -1,7 +1,7 @@
 module main
 
-go 1.20
+go 1.22.0
 
-require github.com/google/gopacket v1.1.19
+toolchain go1.23.0
 
-require golang.org/x/sys v0.0.0-20190412213103-97732733099d // indirect
+require github.com/gopacket/gopacket v1.3.1
