@@ -1,12 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"log"
 	"net"
 )
+
+func uint16ToByte(i uint16) []byte {
+	b := make([]byte, 2)
+	binary.BigEndian.PutUint16(b, i)
+	return b
+}
 
 type segmentRoutingHeader struct {
 	nextHeader  uint8
@@ -19,31 +27,55 @@ type segmentRoutingHeader struct {
 	segmentList []net.IP
 }
 
+func (srh *segmentRoutingHeader) toPacket() []byte {
+	var b bytes.Buffer
+
+	b.WriteByte(srh.nextHeader)
+	b.WriteByte(srh.hdrLen)
+	b.WriteByte(srh.routingType)
+	b.WriteByte(srh.segLeft)
+	b.WriteByte(srh.lastEntry)
+	b.WriteByte(srh.flags)
+	b.Write(uint16ToByte(srh.tags))
+
+	for _, ip := range srh.segmentList {
+		b.Write(ip)
+	}
+
+	return b.Bytes()
+}
+
 func main() {
 	// IPv6ヘッダを作成
 	ip6 := &layers.IPv6{
 		Version:    6,
 		NextHeader: layers.IPProtocolIPv6Routing,
 		HopLimit:   64,
-		SrcIP:      net.ParseIP("2001:db8::1"),
-		DstIP:      net.ParseIP("2001:db8::2"),
+		SrcIP:      net.ParseIP("2001:db8:3::3"),
+		DstIP:      net.ParseIP("2001:db8:200::222"),
 	}
 	// Segment Routing Headerを作成
-	srh := &layers.IPv6Routing{
-		RoutingType:  4,
-		SegmentsLeft: 2, // 残りのセグメント数
-		SourceRoutingIPs: []net.IP{
-			net.ParseIP("2001:db8::2"),
-			net.ParseIP("2001:db8::3"),
+	srh := segmentRoutingHeader{
+		nextHeader:  4,
+		hdrLen:      6,
+		routingType: 4,
+		segLeft:     2,
+		lastEntry:   2,
+		flags:       0,
+		tags:        0,
+		segmentList: []net.IP{
+			net.ParseIP("2001:db8:100::1:0:1e"),
+			net.ParseIP("2001:db8:100::111"),
+			net.ParseIP("2001:db8:200::222"),
 		},
 	}
 	// ICMPv6 Echo Requestの作成
-	icmpv6 := &layers.ICMPv6{
-		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
-	}
+	//icmpv6 := &layers.ICMPv6{
+	//	TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
+	//}
 
 	// ICMPv6 Echo Requestのペイロード
-	payload := []byte("Hello, SRV6!")
+	//payload := []byte("Hello, SRV6!")
 
 	// パケットのバッファを作成
 	buf := gopacket.NewSerializeBuffer()
@@ -53,11 +85,14 @@ func main() {
 	}
 
 	// パケットをシリアライズ
-	err := gopacket.SerializeLayers(buf, opts, ip6, srh, icmpv6, gopacket.Payload(payload))
+	err := gopacket.SerializeLayers(buf, opts, ip6)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("%x\n", buf.Bytes())
+	b := buf.Bytes()
+	b = append(b, srh.toPacket()...)
+
+	fmt.Printf("%x\n", b)
 
 }
