@@ -54,20 +54,22 @@ func main() {
 		SrcIP:      net.ParseIP("2001:db8:3::3"),
 		DstIP:      net.ParseIP("2001:db8:200::222"),
 	}
+
+	segList := []net.IP{
+		net.ParseIP("2001:db8:100::1:0:1e"),
+		net.ParseIP("2001:db8:100::111"),
+		net.ParseIP("2001:db8:200::222"),
+	}
 	// Segment Routing Headerを作成
 	srh := segmentRoutingHeader{
-		nextHeader:  4,
-		hdrLen:      6,
+		nextHeader:  uint8(layers.IPProtocolIPv4),
+		hdrLen:      uint8(len(segList) * 16 / 8),
 		routingType: 4,
 		segLeft:     2,
 		lastEntry:   2,
 		flags:       0,
 		tags:        0,
-		segmentList: []net.IP{
-			net.ParseIP("2001:db8:100::1:0:1e"),
-			net.ParseIP("2001:db8:100::111"),
-			net.ParseIP("2001:db8:200::222"),
-		},
+		segmentList: segList,
 	}
 	// ICMPv6 Echo Requestの作成
 	//icmpv6 := &layers.ICMPv6{
