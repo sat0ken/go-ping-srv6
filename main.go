@@ -50,23 +50,21 @@ func main() {
 	ip6 := &layers.IPv6{
 		Version:    6,
 		NextHeader: layers.IPProtocolIPv6Routing,
-		HopLimit:   64,
-		SrcIP:      net.ParseIP("2001:db8:3::3"),
-		DstIP:      net.ParseIP("2001:db8:200::222"),
+		HopLimit:   63,
+		SrcIP:      net.ParseIP("fc00:b::1"),
+		DstIP:      net.ParseIP("fc00:e::2"),
 	}
 
 	segList := []net.IP{
-		net.ParseIP("2001:db8:100::1:0:1e"),
-		net.ParseIP("2001:db8:100::111"),
-		net.ParseIP("2001:db8:200::222"),
+		net.ParseIP("fc00:e::2"),
 	}
 	// Segment Routing Headerを作成
 	srh := segmentRoutingHeader{
-		nextHeader:  uint8(layers.IPProtocolIPv4),
+		nextHeader:  uint8(layers.IPProtocolIPv6),
 		hdrLen:      uint8(len(segList) * 16 / 8),
 		routingType: 4,
-		segLeft:     2,
-		lastEntry:   2,
+		segLeft:     0,
+		lastEntry:   0,
 		flags:       0,
 		tags:        0,
 		segmentList: segList,
@@ -95,6 +93,6 @@ func main() {
 	b := buf.Bytes()
 	b = append(b, srh.toPacket()...)
 
-	fmt.Printf("%x\n", b)
+	fmt.Printf("%x\n", srh.toPacket())
 
 }
