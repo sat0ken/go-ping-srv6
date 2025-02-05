@@ -1,20 +1,12 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"log"
 	"net"
 )
-
-func uint16ToByte(i uint16) []byte {
-	b := make([]byte, 2)
-	binary.BigEndian.PutUint16(b, i)
-	return b
-}
 
 type segmentRoutingHeader struct {
 	nextHeader  uint8
@@ -23,26 +15,31 @@ type segmentRoutingHeader struct {
 	segLeft     uint8
 	lastEntry   uint8
 	flags       uint8
-	tags        uint16
+	tags        []byte
 	segmentList []net.IP
 }
 
-func (srh *segmentRoutingHeader) toPacket() []byte {
-	var b bytes.Buffer
-
-	b.WriteByte(srh.nextHeader)
-	b.WriteByte(srh.hdrLen)
-	b.WriteByte(srh.routingType)
-	b.WriteByte(srh.segLeft)
-	b.WriteByte(srh.lastEntry)
-	b.WriteByte(srh.flags)
-	b.Write(uint16ToByte(srh.tags))
-
-	for _, ip := range srh.segmentList {
-		b.Write(ip)
+func (srh *segmentRoutingHeader) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeOptions) error {
+	bytes, err := b.PrependBytes(8 + len(srh.segmentList)*16)
+	if err != nil {
+		return err
 	}
+	bytes[0] = srh.nextHeader
+	bytes[1] = srh.hdrLen
+	bytes[2] = srh.routingType
+	bytes[3] = srh.segLeft
+	bytes[4] = srh.lastEntry
+	bytes[5] = srh.flags
+	copy(bytes[6:7], srh.tags)
+	for i, ip := range srh.segmentList {
+		offset := 8 + i*16
+		copy(bytes[offset:offset+16], ip.To16())
+	}
+	return nil
+}
 
-	return b.Bytes()
+func (srh *segmentRoutingHeader) LayerType() gopacket.LayerType {
+	return gopacket.LayerType(47)
 }
 
 func main() {
@@ -66,33 +63,36 @@ func main() {
 		segLeft:     0,
 		lastEntry:   0,
 		flags:       0,
-		tags:        0,
+		tags:        []byte{0x00, 0x00},
 		segmentList: segList,
 	}
-	// ICMPv6 Echo Requestの作成
-	//icmpv6 := &layers.ICMPv6{
-	//	TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
-	//}
 
-	// ICMPv6 Echo Requestのペイロード
-	//payload := []byte("Hello, SRV6!")
+	// IPv6 Next ヘッダを作成
+	ip6Next := &layers.IPv6{
+		Version:    6,
+		NextHeader: layers.IPProtocolICMPv6,
+		HopLimit:   64,
+		SrcIP:      net.ParseIP("fc00:a::1"),
+		DstIP:      net.ParseIP("fc00:d::2"),
+	}
+
+	// ICMPv6 Echo Requestの作成
+	icmp6 := &layers.ICMPv6{
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
+	}
 
 	// パケットのバッファを作成
 	buf := gopacket.NewSerializeBuffer()
 	opts := gopacket.SerializeOptions{
 		FixLengths:       true,
-		ComputeChecksums: true,
+		ComputeChecksums: false,
 	}
 
 	// パケットをシリアライズ
-	err := gopacket.SerializeLayers(buf, opts, ip6)
+	err := gopacket.SerializeLayers(buf, opts, ip6, &srh, ip6Next, icmp6)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	b := buf.Bytes()
-	b = append(b, srh.toPacket()...)
-
-	fmt.Printf("%x\n", srh.toPacket())
-
+	fmt.Printf("%x\n", buf.Bytes())
 }
