@@ -7,18 +7,8 @@ import (
 	"github.com/gopacket/gopacket/pcap"
 	"log"
 	"net"
+	"time"
 )
-
-var echoPacket = []byte{
-	0x80, 0x00, 0xd7, 0x99, 0x70, 0xf1, 0x00, 0x02,
-	0x86, 0xd7, 0xa6, 0x67, 0x00, 0x00, 0x00, 0x00,
-	0x4a, 0xca, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-	0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
-	0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
-	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-}
 
 func parseMac(macaddr string) net.HardwareAddr {
 	parsedMac, _ := net.ParseMAC(macaddr)
@@ -59,11 +49,11 @@ func (srh *segmentRoutingHeader) LayerType() gopacket.LayerType {
 	return gopacket.LayerType(47)
 }
 
-func main() {
+func createICMPv6EchoRequest(seq uint16) []byte {
 	// Ethernetヘッダを作成
 	ethernet := &layers.Ethernet{
-		SrcMAC:       parseMac("52:ca:fe:e3:f1:c0"),
-		DstMAC:       parseMac("f2:8c:86:be:f9:a3"),
+		SrcMAC:       parseMac("f2:8c:86:be:f9:a3"),
+		DstMAC:       parseMac("62:3b:ab:c6:56:de"),
 		EthernetType: layers.EthernetTypeIPv6,
 	}
 	// IPv6ヘッダを作成
@@ -74,10 +64,11 @@ func main() {
 		HopLimit:  64,
 		FlowLabel: 0xb3124,
 		SrcIP:     net.ParseIP("fc00:a::1"),
-		DstIP:     net.ParseIP("fc00:d::2"),
+		DstIP:     net.ParseIP("fc00:d::1"),
 	}
 
 	segList := []net.IP{
+		net.ParseIP("fc00:d::1"),
 		net.ParseIP("fc00:e::2"),
 	}
 	// Segment Routing Headerを作成
@@ -95,13 +86,13 @@ func main() {
 	// ICMPv6 Echo Requestの作成
 	icmp6 := &layers.ICMPv6{
 		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
-		Checksum: 0x879b,
+		Checksum: 0x879d - seq,
 	}
 
 	// ICMPv6 Echo RequestのPayload
 	var payload []byte
 	payload = append(payload, []byte{0x00, 0x01}...)             // identifier
-	payload = append(payload, []byte{0x00, 0x01}...)             // sequence
+	payload = append(payload, []byte{0x00, byte(seq)}...)        // sequence
 	payload = append(payload, []byte{0x00, 0x00, 0x00, 0x00}...) // payload
 
 	// パケットのバッファを作成
@@ -117,22 +108,43 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//fmt.Printf("%x\n", buf.Bytes())
-	handle, err := pcap.OpenLive("h1-r1", 1600, true, pcap.BlockForever)
+	return buf.Bytes()
+}
+
+func main() {
+
+	pingInterval := 1 * time.Second
+
+	handle, err := pcap.OpenLive("r1-r2", 1600, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer handle.Close()
 
-	// pingを送信
-	handle.WritePacketData(buf.Bytes())
+	// Pingのシーケンス番号
+	seq := uint16(0)
+	// ICMPv6エコーリクエストを作成
+	go func() {
+		for {
+			time.Sleep(pingInterval)
+			echoRequest := createICMPv6EchoRequest(seq)
+			seq++
+			// パケットを送信
+			if err := handle.WritePacketData(echoRequest); err != nil {
+				log.Fatalf("Failed to send packet: %v", err)
+			}
+		}
+	}()
 
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	for packet := range packetSource.Packets() {
-		icmpLayer := packet.Layer(layers.LayerTypeICMPv6)
-		reply := icmpLayer.(*layers.ICMPv6)
-		if reply.TypeCode == layers.ICMPv6TypeEchoReply {
-			fmt.Printf("recieve echo reply %+v\n", reply)
-			break
+	for {
+		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+		for packet := range packetSource.Packets() {
+			icmpLayer := packet.Layer(layers.LayerTypeICMPv6)
+			reply := icmpLayer.(*layers.ICMPv6)
+			if reply.TypeCode.Type() == layers.ICMPv6TypeEchoReply {
+				fmt.Printf("recieve echo reply\n")
+				break
+			}
 		}
 	}
 }
