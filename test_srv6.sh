@@ -70,14 +70,6 @@ ip netns exec r4 ip -6 route add fc00:a::/64 via fc00:e::1
 ip netns exec r3 ip -6 route add fc00:a::/64 via fc00:c::1
 ip netns exec r2 ip -6 route add fc00:a::/64 via fc00:b::1
 
-# start tcpdump
-#rm -rf /tmp/srv6-demo.pcap
-#timeout 20 ip netns exec r2 tcpdump -i r2-r1 ip6 -w /tmp/srv6-demo.pcap &
-
-# ping with default path from h1 to h2
-#sleep 3
-#ip netns exec h1 ping -6 -c 1 fc00:d::2
-
 # enable seg6
 ip netns exec r4 sysctl net.ipv6.conf.r4-r2.seg6_enabled=1
 ip netns exec r2 sysctl net.ipv6.conf.r2-r4.seg6_enabled=1
@@ -93,11 +85,6 @@ do
   ip netns exec r1 ip -6 route show
 
   # ping with SRv6 path from h1 to h2
-#  sleep 3
 #  ip netns exec h1 ping -6 -c 1 fc00:d::2
 done
 
-#for job in `jobs -p`
-#do
-#  wait $job
-#done
