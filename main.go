@@ -1,14 +1,31 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/gopacket/gopacket/pcap"
 	"log"
 	"net"
+	"os"
 	"time"
 )
+
+type nwDevice struct {
+	macAddr  net.HardwareAddr
+	ipv6Addr net.IP
+}
+
+func getMacAddr(ifname string) net.HardwareAddr {
+	netifs, _ := net.Interfaces()
+	for _, netif := range netifs {
+		if netif.Name == ifname {
+			return netif.HardwareAddr
+		}
+	}
+	return nil
+}
 
 func parseMac(macaddr string) net.HardwareAddr {
 	parsedMac, _ := net.ParseMAC(macaddr)
@@ -49,11 +66,19 @@ func (srh *segmentRoutingHeader) LayerType() gopacket.LayerType {
 	return gopacket.LayerType(47)
 }
 
-func createICMPv6EchoRequest(seq uint16) []byte {
+type icmpRequestInfo struct {
+	srcMac net.HardwareAddr
+	srcIp  string
+	destIp string
+	srv6Ip string
+	seq    uint16
+}
+
+func createICMPv6EchoRequest(icmpReq icmpRequestInfo) []byte {
 	// Ethernetヘッダを作成
 	ethernet := &layers.Ethernet{
-		SrcMAC:       parseMac("f2:8c:86:be:f9:a3"),
-		DstMAC:       parseMac("62:3b:ab:c6:56:de"),
+		SrcMAC:       icmpReq.srcMac,
+		DstMAC:       parseMac("62:3b:ab:c6:56:de"), // r2 mac addr
 		EthernetType: layers.EthernetTypeIPv6,
 	}
 	// IPv6ヘッダを作成
@@ -63,21 +88,21 @@ func createICMPv6EchoRequest(seq uint16) []byte {
 		//NextHeader: layers.IPProtocolICMPv6,
 		HopLimit:  64,
 		FlowLabel: 0xb3124,
-		SrcIP:     net.ParseIP("fc00:a::1"),
-		DstIP:     net.ParseIP("fc00:d::1"),
+		SrcIP:     net.ParseIP(icmpReq.srcIp),  // "fc00:a::1"
+		DstIP:     net.ParseIP(icmpReq.srv6Ip), // "fc00:e::2"
 	}
 
 	segList := []net.IP{
-		net.ParseIP("fc00:d::1"),
-		net.ParseIP("fc00:e::2"),
+		net.ParseIP(icmpReq.destIp), // "fc00:d::2"
+		net.ParseIP(icmpReq.srv6Ip), // "fc00:e::2"
 	}
 	// Segment Routing Headerを作成
 	srh := segmentRoutingHeader{
 		nextHeader:  uint8(layers.IPProtocolICMPv6),
 		hdrLen:      uint8(len(segList) * 16 / 8),
 		routingType: 4,
-		segLeft:     0,
-		lastEntry:   0,
+		segLeft:     1,
+		lastEntry:   1,
 		flags:       0,
 		tags:        []byte{0x00, 0x00},
 		segmentList: segList,
@@ -86,14 +111,14 @@ func createICMPv6EchoRequest(seq uint16) []byte {
 	// ICMPv6 Echo Requestの作成
 	icmp6 := &layers.ICMPv6{
 		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
-		Checksum: 0x879d - seq,
+		Checksum: 0x879c - icmpReq.seq,
 	}
 
 	// ICMPv6 Echo RequestのPayload
 	var payload []byte
-	payload = append(payload, []byte{0x00, 0x01}...)             // identifier
-	payload = append(payload, []byte{0x00, byte(seq)}...)        // sequence
-	payload = append(payload, []byte{0x00, 0x00, 0x00, 0x00}...) // payload
+	payload = append(payload, []byte{0x00, 0x01}...)              // identifier
+	payload = append(payload, []byte{0x00, byte(icmpReq.seq)}...) // sequence
+	payload = append(payload, []byte{0x00, 0x00, 0x00, 0x00}...)  // payload
 
 	// パケットのバッファを作成
 	buf := gopacket.NewSerializeBuffer()
@@ -112,10 +137,21 @@ func createICMPv6EchoRequest(seq uint16) []byte {
 }
 
 func main() {
+	var iface = flag.String("I", "r1-r2", "Interface to read packets from")
+	var sr = flag.String("sr", "fc00:e::2", "SRv6 Header IPv6 Addr")
+	var srcIp = flag.String("src", "fc00:a::1", "Source IPv6 Addr")
+	flag.Parse()
+
+	args := flag.Args()
+	if len(args) != 1 {
+		fmt.Println("Usage: ping-srv6 -I <interface> <target>")
+		os.Exit(1)
+	}
+	dstIP := args[0]
 
 	pingInterval := 1 * time.Second
 
-	handle, err := pcap.OpenLive("r1-r2", 1600, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive(*iface, 1600, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -123,11 +159,17 @@ func main() {
 
 	// Pingのシーケンス番号
 	seq := uint16(0)
-	// ICMPv6エコーリクエストを作成
+	// Pingを送信する
 	go func() {
 		for {
 			time.Sleep(pingInterval)
-			echoRequest := createICMPv6EchoRequest(seq)
+			echoRequest := createICMPv6EchoRequest(icmpRequestInfo{
+				srcMac: getMacAddr(*iface),
+				srcIp:  *srcIp,
+				destIp: dstIP,
+				srv6Ip: *sr,
+				seq:    seq,
+			})
 			seq++
 			// パケットを送信
 			if err := handle.WritePacketData(echoRequest); err != nil {
@@ -142,7 +184,7 @@ func main() {
 			icmpLayer := packet.Layer(layers.LayerTypeICMPv6)
 			reply := icmpLayer.(*layers.ICMPv6)
 			if reply.TypeCode.Type() == layers.ICMPv6TypeEchoReply {
-				fmt.Printf("recieve echo reply\n")
+				fmt.Printf("recieve echo reply from %s\n", dstIP)
 				break
 			}
 		}
